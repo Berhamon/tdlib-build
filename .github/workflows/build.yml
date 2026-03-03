@@ -27,26 +27,31 @@ jobs:
         wget -q "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -O cmd.zip
         unzip -q cmd.zip
         mv cmdline-tools $HOME/android-sdk/cmdline-tools/latest
-        
+
         export ANDROID_SDK_ROOT=$HOME/android-sdk
         export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
-        
+
         yes | sdkmanager --licenses > /dev/null 2>&1 || true
         sdkmanager "ndk;25.2.9519653" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
-        
+
         echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
         echo "ANDROID_NDK_ROOT=$HOME/android-sdk/ndk/25.2.9519653" >> $GITHUB_ENV
         echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
     - name: Build TDLib
       run: |
-        echo "SDK: $ANDROID_SDK_ROOT"
-        echo "NDK: $ANDROID_NDK_ROOT"
-        ls -la $ANDROID_SDK_ROOT/
-        ls -la $ANDROID_NDK_ROOT/ || echo "NDK dir check"
-        
         git clone --depth 1 https://github.com/tdlib/td.git
         cd td/example/android
+
+        # Создаём ссылку SDK → реальный Android SDK
+        ln -s $ANDROID_SDK_ROOT SDK
+
+        # Проверяем
+        echo "SDK symlink:"
+        ls -la SDK/
+        echo "NDK:"
+        ls $ANDROID_NDK_ROOT/ndk-build
+
         chmod +x build-tdlib.sh
         ./build-tdlib.sh
 
