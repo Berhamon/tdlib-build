@@ -32,7 +32,7 @@ jobs:
             curl \
             zip
 
-      - name: Setup Android SDK
+      - name: Setup Android SDK with correct NDK
         run: |
           export ANDROID_SDK_ROOT=$HOME/android-sdk
           mkdir -p $ANDROID_SDK_ROOT/cmdline-tools
@@ -48,11 +48,13 @@ jobs:
           
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           
-          echo "Installing NDK and tools..."
-          sdkmanager "ndk;25.2.9519653" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+          # Устанавливаем NDK версии 23.2.8568313 — именно эту ищет build-openssl.sh
+          echo "Installing NDK 23.2.8568313..."
+          sdkmanager "ndk;23.2.8568313" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
           
           echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_NDK_ROOT=$HOME/android-sdk/ndk/25.2.9519653" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$HOME/android-sdk/ndk/23.2.8568313" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=$HOME/android-sdk/ndk/23.2.8568313" >> $GITHUB_ENV
           echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
@@ -60,58 +62,47 @@ jobs:
         run: |
           cd $HOME
           git clone --depth 1 https://github.com/tdlib/td.git
-          echo "TDLib cloned successfully"
 
       - name: Create SDK symlink
         run: |
           cd $HOME/td/example/android
           ln -sf $ANDROID_SDK_ROOT SDK
+          echo "=== SDK contents ==="
           ls -la SDK/
+          echo "=== NDK contents ==="
+          ls -la SDK/ndk/
 
       - name: Build OpenSSL
         run: |
           cd $HOME/td/example/android
           
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/23.2.8568313
+          
           echo "=== Building OpenSSL ==="
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          
           chmod +x ./build-openssl.sh
           ./build-openssl.sh
           
           echo "=== OpenSSL build complete ==="
-          ls -la third-party/
+          ls -la third-party/openssl/ || echo "checking openssl dir"
 
       - name: Build TDLib
         run: |
           cd $HOME/td/example/android
           
-          echo "=== Building TDLib ==="
-          echo "SDK: $ANDROID_SDK_ROOT"
-          echo "NDK: $ANDROID_NDK_ROOT"
+          export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/23.2.8568313
           
+          echo "=== Building TDLib ==="
           chmod +x ./build-tdlib.sh
           ./build-tdlib.sh
           
-          echo "=== TDLib build complete ==="
-
-      - name: List build output
-        run: |
-          echo "=== Searching for AAR files ==="
-          find $HOME/td -name "*.aar" -type f 2>/dev/null || echo "No AAR found with find"
-          
-          echo "=== Checking tdlib directory ==="
-          ls -la $HOME/td/example/android/tdlib/ || echo "tdlib directory not found"
+          echo "=== Build complete ==="
+          find . -name "*.aar" -type f
 
       - name: Upload TDLib AAR
         uses: actions/upload-artifact@v4
         with:
           name: tdlib-aar
-          path: |
-            ~/td/example/android/tdlib/*.aar
-            ~/td/example/android/tdlib/tdlib-*.aar
-          if-no-files-found: warn
-
-      - name: Upload all build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: tdlib-full-build
           path: ~/td/example/android/tdlib/
           if-no-files-found: warn
