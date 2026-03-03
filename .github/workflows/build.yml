@@ -6,7 +6,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
     - name: Install deps
@@ -38,21 +38,25 @@ jobs:
         echo "ANDROID_NDK_ROOT=$HOME/android-sdk/ndk/25.2.9519653" >> $GITHUB_ENV
         echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-    - name: Build TDLib
+    - name: Clone TDLib
       run: |
         git clone --depth 1 https://github.com/tdlib/td.git
-        cd td/example/android
 
-        # Создаём ссылку SDK → реальный Android SDK
+    - name: Setup SDK symlink
+      run: |
+        cd td/example/android
         ln -s $ANDROID_SDK_ROOT SDK
 
-        # Проверяем
-        echo "SDK symlink:"
-        ls -la SDK/
-        echo "NDK:"
-        ls $ANDROID_NDK_ROOT/ndk-build
+    - name: Build OpenSSL
+      run: |
+        cd td/example/android
+        chmod +x ./build-openssl.sh
+        ./build-openssl.sh
 
-        chmod +x build-tdlib.sh
+    - name: Build TDLib
+      run: |
+        cd td/example/android
+        chmod +x ./build-tdlib.sh
         ./build-tdlib.sh
 
     - name: Upload AAR
