@@ -2,17 +2,33 @@ name: Build TDLib
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/build-tdlib.yml'
+  schedule:
+    - cron: '0 0 1 * *'  # Ежемесячное обновление
+
+env:
+  NDK_VERSION: 25.2.9519653
+  OPENSSL_VERSION: 3.2.1
+  TDLIB_VERSION: v1.8.19
 
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    
+    strategy:
+      matrix:
+        abi: [armeabi-v7a, arm64-v8a, x86, x86_64]
+      fail-fast: false  # Продолжить сборку других ABI при ошибке
 
     steps:
-    - name: Install deps
+    - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake g++ php-cli gperf
+        sudo apt-get install -y cmake g++ php-cli gperf ninja-build
 
     - name: Setup Java
       uses: actions/setup-java@v4
@@ -31,36 +47,120 @@ jobs:
         export ANDROID_SDK_ROOT=$HOME/android-sdk
         export PATH=$PATH:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
 
+        # Принимаем все лицензии
         yes | sdkmanager --licenses > /dev/null 2>&1 || true
-        sdkmanager "ndk;25.2.9519653" "cmake;3.22.1" "platforms;android-34" "build-tools;34.0.0"
+        
+        # Устанавливаем компоненты
+        sdkmanager "ndk;$NDK_VERSION" \
+                   "cmake;3.22.1" \
+                   "platforms;android-34" \
+                   "build-tools;34.0.0"
 
+        # Сохраняем переменные окружения
         echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-        echo "ANDROID_NDK_ROOT=$HOME/android-sdk/ndk/25.2.9519653" >> $GITHUB_ENV
+        echo "ANDROID_NDK_ROOT=$HOME/android-sdk/ndk/$NDK_VERSION" >> $GITHUB_ENV
         echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
     - name: Clone TDLib
       run: |
-        git clone --depth 1 https://github.com/tdlib/td.git
+        git clone --depth 1 --branch $TDLIB_VERSION https://github.com/tdlib/td.git
+        echo "TDLIB_COMMIT=$(cd td && git rev-parse HEAD)" >> $GITHUB_ENV
 
     - name: Setup SDK symlink
       run: |
         cd td/example/android
         ln -s $ANDROID_SDK_ROOT SDK
 
-    - name: Build OpenSSL
+    - name: Build OpenSSL for ${{ matrix.abi }}
       run: |
         cd td/example/android
         chmod +x ./build-openssl.sh
+        
+        # Модифицируем скрипт для выбора конкретной ABI
+        export ANDROID_ABI=${{ matrix.abi }}
+        
+        # Создаем временную модификацию скрипта для сборки только одной ABI
+        cat > build-openssl-single.sh << 'EOF'
+        #!/bin/bash
+        cd openssl
+        ./build.sh
+        EOF
+        
+        chmod +x build-openssl-single.sh
         ./build-openssl.sh
+        
+        # Сохраняем OpenSSL артефакты
+        mkdir -p $GITHUB_WORKSPACE/openssl-out/${{ matrix.abi }}
+        cp -r td/example/android/openssl/openssl-*/* $GITHUB_WORKSPACE/openssl-out/${{ matrix.abi }}/ || true
 
-    - name: Build TDLib
+    - name: Build TDLib for ${{ matrix.abi }}
       run: |
         cd td/example/android
         chmod +x ./build-tdlib.sh
+        
+        # Модифицируем для конкретной ABI
+        export ANDROID_ABI=${{ matrix.abi }}
+        
+        # Запускаем сборку
         ./build-tdlib.sh
+        
+        # Копируем результат
+        mkdir -p $GITHUB_WORKSPACE/tdlib-out/${{ matrix.abi }}
+        find . -name "*.aar" -exec cp {} $GITHUB_WORKSPACE/tdlib-out/${{ matrix.abi }}/ \;
 
-    - name: Upload AAR
+    - name: Upload AAR for ${{ matrix.abi }}
       uses: actions/upload-artifact@v4
       with:
-        name: tdlib-aar
+        name: tdlib-aar-${{ matrix.abi }}
         path: td/example/android/tdlib/tdlib-release.aar
+        retention-days: 30
+        
+    - name: Upload debug symbols
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: tdlib-symbols-${{ matrix.abi }}
+        path: td/example/android/tdlib/.cxx/**/*.so
+        retention-days: 30
+
+  # Объединение всех ABI в один AAR
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Download all AARs
+      uses: actions/download-artifact@v4
+      with:
+        pattern: tdlib-aar-*
+        path: aars
+        
+    - name: Create universal AAR
+      run: |
+        mkdir -p universal/jni
+        
+        # Копируем библиотеки из всех ABI
+        for abi in armeabi-v7a arm64-v8a x86 x86_64; do
+          if [ -f "aars/tdlib-aar-$abi/tdlib-release.aar" ]; then
+            # Распаковываем AAR
+            cd aars/tdlib-aar-$abi
+            unzip -q tdlib-release.aar -d tdlib-extracted
+            cd ../..
+            
+            # Копируем .so файлы
+            mkdir -p universal/jni/$abi
+            find aars/tdlib-aar-$abi/tdlib-extracted -name "*.so" -exec cp {} universal/jni/$abi/ \;
+          fi
+        done
+        
+        # Создаем объединенный AAR
+        cd universal
+        zip -r tdlib-universal-release.aar jni/
+        cd ..
+        
+    - name: Upload universal AAR
+      uses: actions/upload-artifact@v4
+      with:
+        name: tdlib-universal-aar
+        path: universal/tdlib-universal-release.aar
